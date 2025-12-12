@@ -81,7 +81,6 @@ def logged(exception_cls: type[Exception], mode: str = "console"):
                 log_error(e, func.__name__)
                 raise e
 
-        # Перевіряємо, чи функція асинхронна
         if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
@@ -107,7 +106,6 @@ class FileManager:
 
         try:
             with open(self.file_path, 'r', encoding='utf-8') as f:
-                # Використання стандартного yaml модуля замість власного парсера
                 data = yaml.safe_load(f)
                 if data is None:
                     return {}
@@ -124,7 +122,6 @@ class FileManager:
 
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
-                # Використання стандартного yaml модуля для запису
                 yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
         except Exception as e:
             raise FileCorrupted(f"Failed to write to file: {e}")
