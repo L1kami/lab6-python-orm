@@ -7,11 +7,10 @@ import asyncio
 import functools
 import logging
 import os
-import inspect  # Потрібен для перевірки асинхронності
-import yaml  # Стандартна бібліотека для YAML (pip install pyyaml)
+import inspect
+import yaml
 from typing import Any, Dict, List, Optional, Union
 
-# Configuring logging
 logging.basicConfig(
     filename='app.log',
     level=logging.INFO,
@@ -44,7 +43,6 @@ def logged(exception_cls: type[Exception], mode: str = "console"):
     """Decorator for logging exceptions to console or file (supports sync and async)."""
 
     def decorator(func):
-        # Логіка логування винесена в окрему функцію для уникнення дублювання
         def log_error(e, func_name):
             logger = logging.getLogger(func_name)
             logger.setLevel(logging.ERROR)
@@ -196,21 +194,17 @@ class QuerySet:
         raw_data = await asyncio.to_thread(db_manager.read)
 
         if isinstance(raw_data, dict):
-            # Якщо YAML повернув словник (наприклад, config), а ми очікуємо список
             raw_data = []
 
         result_objects = []
 
-        # PyYAML повертає список словників або словник, адаптуємо:
         if raw_data is None:
             raw_data = []
 
-        # Обробка даних, які можуть бути у форматі {"data": [...]} або просто [...]
         data_list = raw_data
         if isinstance(raw_data, dict) and "data" in raw_data:
             data_list = raw_data["data"]
         elif isinstance(raw_data, dict):
-            # Якщо це просто словник, спробуємо перетворити його на список
             data_list = [raw_data]
 
         for record in data_list:
@@ -279,7 +273,6 @@ class Model(metaclass=ModelMeta):
 
         all_data = await asyncio.to_thread(db_manager.read)
 
-        # Адаптація під структуру PyYAML
         if isinstance(all_data, dict) and "data" in all_data:
             target_list = all_data["data"]
         elif isinstance(all_data, list):
@@ -287,7 +280,6 @@ class Model(metaclass=ModelMeta):
         else:
             target_list = []
 
-        # Якщо ми прочитали порожній файл або словник, починаємо зі списку
         if not isinstance(target_list, list):
             target_list = []
 
@@ -317,7 +309,6 @@ class Model(metaclass=ModelMeta):
             if not found:
                 target_list.append(obj_data)
 
-        # Якщо ми працюємо в режимі "data: [...]", зберігаємо структуру
         if isinstance(all_data, dict) and "data" in all_data:
             all_data["data"] = target_list
             write_data = all_data
@@ -344,13 +335,11 @@ async def main():
     result_file = "result.yaml"
     ops_log_file = "file_operations.log"
 
-    # Створюємо файли, якщо їх немає
     for f_name in [config_file, result_file, ops_log_file]:
         if not os.path.exists(f_name):
             logging.info(f"Creating file: {f_name}")
             with open(f_name, "w", encoding='utf-8') as f:
                 if f_name == config_file:
-                    # YAML формат для конфігу
                     f.write("database: students.yaml\n")
                 else:
                     f.write("")
@@ -394,7 +383,6 @@ async def main():
     logging.info(f"Writing results to {result_file}")
     try:
         result_manager = FileManager(result_file)
-        # Записуємо у форматі YAML
         result_manager.write({"data": values})
     except FileNotFound:
         logging.error("Result file not found!")
