@@ -1,14 +1,17 @@
 """
-Асинхронна ORM для роботи з текстовими файлами.
-Реалізує парсер, метакласи, дескриптори та логування.
+Asynchronous ORM for working with YAML files.
+Implements parser, metaclasses, descriptors, and logging.
 """
 
 import asyncio
 import functools
 import logging
 import os
+import inspect  # Потрібен для перевірки асинхронності
+import yaml  # Стандартна бібліотека для YAML (pip install pyyaml)
 from typing import Any, Dict, List, Optional, Union
 
+# Configuring logging
 logging.basicConfig(
     filename='app.log',
     level=logging.INFO,
@@ -24,54 +27,72 @@ file_ops_logger.addHandler(file_ops_handler)
 
 
 class FileNotFound(Exception):
-    """Файл не знайдено."""
-    def __init__(self, message: str = "Файл не знайдено"):
+    """File not found exception."""
+
+    def __init__(self, message: str = "File not found"):
         super().__init__(message)
 
 
 class FileCorrupted(Exception):
-    """Помилка доступу або пошкодження файлу."""
-    def __init__(self, message: str = "Файл пошкоджено або помилка доступу"):
+    """File access error or corruption exception."""
+
+    def __init__(self, message: str = "File corrupted or access error"):
         super().__init__(message)
 
 
 def logged(exception_cls: type[Exception], mode: str = "console"):
-    """Декоратор для логування винятків у консоль або файл."""
+    """Decorator for logging exceptions to console or file (supports sync and async)."""
+
     def decorator(func):
+        # Логіка логування винесена в окрему функцію для уникнення дублювання
+        def log_error(e, func_name):
+            logger = logging.getLogger(func_name)
+            logger.setLevel(logging.ERROR)
+
+            if logger.hasHandlers():
+                logger.handlers.clear()
+
+            if mode == "file":
+                handler = logging.FileHandler(
+                    "file_operations.log", encoding='utf-8'
+                )
+                fmt = '%(asctime)s - %(levelname)s - %(message)s'
+                formatter = logging.Formatter(fmt)
+            else:
+                handler = logging.StreamHandler()
+                fmt = '[CONSOLE LOG] %(levelname)s: %(message)s'
+                formatter = logging.Formatter(fmt)
+
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.error(f"Exception in {func_name}: {e}")
+
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except exception_cls as e:
+                log_error(e, func.__name__)
+                raise e
+
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
             except exception_cls as e:
-                logger = logging.getLogger(func.__name__)
-                logger.setLevel(logging.ERROR)
-
-                if logger.hasHandlers():
-                    logger.handlers.clear()
-
-                if mode == "file":
-                    handler = logging.FileHandler(
-                        "file_operations.log", encoding='utf-8'
-                    )
-                    fmt = '%(asctime)s - %(levelname)s - %(message)s'
-                    formatter = logging.Formatter(fmt)
-                else:
-                    handler = logging.StreamHandler()
-                    fmt = '[CONSOLE LOG] %(levelname)s: %(message)s'
-                    formatter = logging.Formatter(fmt)
-
-                handler.setFormatter(formatter)
-                logger.addHandler(handler)
-
-                logger.error(f"Виняток у {func.__name__}: {e}")
-
+                log_error(e, func.__name__)
                 raise e
-        return wrapper
+
+        # Перевіряємо, чи функція асинхронна
+        if inspect.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
+
     return decorator
 
 
 class FileManager:
-    """Клас для читання та запису файлів."""
+    """Class for reading and writing YAML files."""
 
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -79,104 +100,43 @@ class FileManager:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 f.write("")
 
-    @staticmethod
-    def _parse_value(value: str) -> Union[int, str]:
-        """Конвертує рядок у число, якщо це можливо."""
-        value = value.strip()
-        if value.isdigit():
-            return int(value)
-        return value
-
     @logged(FileCorrupted, mode="console")
     def read(self) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """Читає та парсить файл."""
-        msg = f"Читання файлу: {self.file_path}"
+        """Reads and parses the YAML file."""
+        msg = f"Reading file: {self.file_path}"
         logging.info(msg)
         file_ops_logger.info(msg)
 
-        data = []
         try:
             with open(self.file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-
-            if not lines:
-                return {}
-
-            first_line = lines[0].strip()
-
-            if first_line.startswith("data:"):
-                res_list = []
-                for line in lines[1:]:
-                    if line.strip().startswith("- "):
-                        res_list.append(line.strip()[2:])
-                return {"data": res_list}
-
-            if first_line.startswith("- "):
-                current_obj = {}
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    if line.startswith("- "):
-                        if current_obj:
-                            data.append(current_obj)
-                        current_obj = {}
-                        key_part = line[2:]
-                        if ":" in key_part:
-                            k, v = key_part.split(":", 1)
-                            current_obj[k.strip()] = self._parse_value(v)
-                    elif ":" in line:
-                        k, v = line.split(":", 1)
-                        current_obj[k.strip()] = self._parse_value(v)
-                if current_obj:
-                    data.append(current_obj)
+                # Використання стандартного yaml модуля замість власного парсера
+                data = yaml.safe_load(f)
+                if data is None:
+                    return {}
                 return data
-
-            config = {}
-            for line in lines:
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    config[k.strip()] = self._parse_value(v)
-            return config
-
         except Exception as e:
-            raise FileCorrupted(f"Не вдалося прочитати файл: {e}")
+            raise FileCorrupted(f"Failed to read file: {e}")
 
     @logged(FileCorrupted, mode="file")
     def write(self, data: Union[Dict, List]):
-        """Записує дані у файл."""
-        msg = f"Запис у файл: {self.file_path}"
+        """Writes data to the YAML file."""
+        msg = f"Writing to file: {self.file_path}"
         logging.info(msg)
         file_ops_logger.info(msg)
 
         try:
             with open(self.file_path, 'w', encoding='utf-8') as f:
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        f.write(f"{k}:\n")
-                        if isinstance(v, list):
-                            for item in v:
-                                f.write(f"- {item}\n")
-                        else:
-                            f.write(f" {v}\n")
-                elif isinstance(data, list):
-                    for record in data:
-                        keys = list(record.keys())
-                        if not keys:
-                            continue
-                        f.write(f"- {keys[0]}: {record[keys[0]]}\n")
-                        for k in keys[1:]:
-                            f.write(f"  {k}: {record[k]}\n")
+                # Використання стандартного yaml модуля для запису
+                yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
         except Exception as e:
-            raise FileCorrupted(f"Не вдалося записати у файл: {e}")
+            raise FileCorrupted(f"Failed to write to file: {e}")
 
 
 db_manager: Optional[FileManager] = None
 
 
 class Field:
-    """Базовий дескриптор поля."""
+    """Base field descriptor."""
 
     def __init__(self, type_name: str):
         self.type_name = type_name
@@ -192,34 +152,36 @@ class Field:
 
     def __set__(self, instance, value):
         if self.type_name == "INTEGER" and not isinstance(value, int):
-            raise ValueError(f"Поле {self.name} має бути числом")
+            raise ValueError(f"Field {self.name} must be an integer")
         if self.type_name == "TEXT" and not isinstance(value, str):
-            raise ValueError(f"Поле {self.name} має бути рядком")
+            raise ValueError(f"Field {self.name} must be a string")
         instance.__dict__[self.name] = value
 
 
 class IntField(Field):
-    """Числове поле."""
+    """Integer field."""
+
     def __init__(self, pk: bool = False):
         super().__init__("INTEGER")
         self.pk = pk
 
 
 class StringField(Field):
-    """Рядкове поле."""
+    """String field."""
+
     def __init__(self):
         super().__init__("TEXT")
 
 
 class QuerySet:
-    """Менеджер лінивих запитів."""
+    """Lazy query manager."""
 
     def __init__(self, model_class):
         self.model_class = model_class
         self.conditions = {}
 
     def filter(self, **kwargs):
-        """Додає умови фільтрації."""
+        """Adds filter conditions."""
         self.conditions.update(kwargs)
         return self
 
@@ -227,18 +189,34 @@ class QuerySet:
         return self.run_query().__await__()
 
     async def run_query(self):
-        """Виконує асинхронний запит."""
+        """Executes asynchronous query."""
         if db_manager is None:
-            raise RuntimeError("Менеджер БД не ініціалізовано!")
+            raise RuntimeError("DB Manager not initialized!")
 
         raw_data = await asyncio.to_thread(db_manager.read)
 
         if isinstance(raw_data, dict):
+            # Якщо YAML повернув словник (наприклад, config), а ми очікуємо список
             raw_data = []
 
         result_objects = []
 
-        for record in raw_data:
+        # PyYAML повертає список словників або словник, адаптуємо:
+        if raw_data is None:
+            raw_data = []
+
+        # Обробка даних, які можуть бути у форматі {"data": [...]} або просто [...]
+        data_list = raw_data
+        if isinstance(raw_data, dict) and "data" in raw_data:
+            data_list = raw_data["data"]
+        elif isinstance(raw_data, dict):
+            # Якщо це просто словник, спробуємо перетворити його на список
+            data_list = [raw_data]
+
+        for record in data_list:
+            if not isinstance(record, dict):
+                continue
+
             match = True
             for key, val in self.conditions.items():
                 if record.get(key) != val:
@@ -256,7 +234,7 @@ class QuerySet:
 
 
 class ModelMeta(type):
-    """Метаклас для реєстрації полів моделі."""
+    """Metaclass for model field registration."""
 
     def __new__(cls, name, bases, attrs):
         if name == "Model":
@@ -278,7 +256,7 @@ class ModelMeta(type):
 
 
 class Model(metaclass=ModelMeta):
-    """Базова модель ORM."""
+    """Base ORM model."""
 
     fields: Dict[str, Field] = {}
     table_name: str = ""
@@ -290,18 +268,28 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     async def create_table(cls):
-        """Ініціалізація таблиці."""
-        logging.info(f"Ініціалізація таблиці для {cls.__name__}")
+        """Table initialization."""
+        logging.info(f"Initializing table for {cls.__name__}")
         pass
 
     async def save(self):
-        """Зберігає об'єкт у файл."""
+        """Saves object to file."""
         if db_manager is None:
-            raise RuntimeError("Менеджер БД не ініціалізовано!")
+            raise RuntimeError("DB Manager not initialized!")
 
         all_data = await asyncio.to_thread(db_manager.read)
-        if isinstance(all_data, dict):
-            all_data = []
+
+        # Адаптація під структуру PyYAML
+        if isinstance(all_data, dict) and "data" in all_data:
+            target_list = all_data["data"]
+        elif isinstance(all_data, list):
+            target_list = all_data
+        else:
+            target_list = []
+
+        # Якщо ми прочитали порожній файл або словник, починаємо зі списку
+        if not isinstance(target_list, list):
+            target_list = []
 
         obj_data = {}
         for field in self.fields:
@@ -311,29 +299,36 @@ class Model(metaclass=ModelMeta):
 
         if not hasattr(self, 'id') or self.id is None:
             max_id = 0
-            for row in all_data:
-                if 'id' in row and isinstance(row['id'], int):
+            for row in target_list:
+                if isinstance(row, dict) and 'id' in row and isinstance(row['id'], int):
                     if row['id'] > max_id:
                         max_id = row['id']
             self.id = max_id + 1
             obj_data['id'] = self.id
 
-            all_data.append(obj_data)
+            target_list.append(obj_data)
         else:
             found = False
-            for i, row in enumerate(all_data):
-                if row.get('id') == self.id:
-                    all_data[i] = obj_data
+            for i, row in enumerate(target_list):
+                if isinstance(row, dict) and row.get('id') == self.id:
+                    target_list[i] = obj_data
                     found = True
                     break
             if not found:
-                all_data.append(obj_data)
+                target_list.append(obj_data)
 
-        await asyncio.to_thread(db_manager.write, all_data)
+        # Якщо ми працюємо в режимі "data: [...]", зберігаємо структуру
+        if isinstance(all_data, dict) and "data" in all_data:
+            all_data["data"] = target_list
+            write_data = all_data
+        else:
+            write_data = target_list
+
+        await asyncio.to_thread(db_manager.write, write_data)
 
 
 class User(Model):
-    """Модель користувача."""
+    """User model."""
     id = IntField(pk=True)
     username = StringField()
     age = IntField()
@@ -343,17 +338,19 @@ class User(Model):
 
 
 async def main():
-    """Точка входу в програму."""
-    logging.info("--- Запуск програми ---")
+    """Program entry point."""
+    logging.info("--- Program Start ---")
     config_file = "orm_config.yaml"
     result_file = "result.yaml"
     ops_log_file = "file_operations.log"
 
+    # Створюємо файли, якщо їх немає
     for f_name in [config_file, result_file, ops_log_file]:
         if not os.path.exists(f_name):
-            logging.info(f"Створення файлу: {f_name}")
+            logging.info(f"Creating file: {f_name}")
             with open(f_name, "w", encoding='utf-8') as f:
                 if f_name == config_file:
+                    # YAML формат для конфігу
                     f.write("database: students.yaml\n")
                 else:
                     f.write("")
@@ -362,7 +359,7 @@ async def main():
         config_manager = FileManager(config_file)
         config = config_manager.read()
     except FileNotFound:
-        logging.error("Конфігураційний файл не знайдено!")
+        logging.error("Configuration file not found!")
         return
 
     if not isinstance(config, dict):
@@ -394,14 +391,15 @@ async def main():
     for val in values:
         print(f"- {val}")
 
-    logging.info(f"Запис результатів у {result_file}")
+    logging.info(f"Writing results to {result_file}")
     try:
         result_manager = FileManager(result_file)
+        # Записуємо у форматі YAML
         result_manager.write({"data": values})
     except FileNotFound:
-        logging.error("Файл результатів не знайдено!")
+        logging.error("Result file not found!")
 
-    logging.info("--- Завершення програми ---")
+    logging.info("--- Program End ---")
 
 
 if __name__ == "__main__":
